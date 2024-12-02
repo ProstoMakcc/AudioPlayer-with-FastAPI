@@ -1,0 +1,19 @@
+<!DOCTYPE html> 
+<html lang="en"> 
+    <head> 
+        <meta charset="UTF-8"> 
+        <title>Audio page</title> 
+        <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+    </head> 
+    <body> 
+        <h1>All Tracks</h1> 
+        <ul> 
+            <!-- TRACKS_LIST -->
+        </ul> 
+        <form action="/tracks/upload" method="post" enctype="multipart/form-data"> 
+            <input type="file" name="file" accept="audio/*"> 
+            <button type="submit">Upload</button> 
+        </form> 
+     
+    </body> 
+    </html>
