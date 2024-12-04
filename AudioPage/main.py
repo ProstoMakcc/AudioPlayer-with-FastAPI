@@ -1,40 +1,48 @@
 from fastapi import FastAPI, UploadFile, HTTPException, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, validator
 import shutil
 from typing import List
+from fastapi.templating import Jinja2Templates
+from starlette.requests import Request
 
 app = FastAPI()
+templates = Jinja2Templates(directory="templates")
+
+allowed_extensions = [".mp3", ".ogg", ".wav"]
 
 class Track(BaseModel):
     id: int
-    title: str
+    title: str = Field(min_length=5, max_length=50)
     artist: str
     path: str
+
+    @validator("path")
+    def validate_path(cls, v):
+        ext = v[-4] + v[-3] + v[-2] + v[-1]
+        if ext not in allowed_extensions:
+            raise ValueError("Unsupported extension")
+        return v
 
 tracks = []
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/", response_class=HTMLResponse)
-def read_root():
-    tracks_list = ""
+@app.get("/", response_class=Request)
+def read_root(request:Request):
+    tracks_list = []
     for track in tracks:
-        tracks_list += f"<li>{track.title} - {track.artist} <a href='/tracks/{track.id}'>Play</a></li>"
+        tracks_list.append(track)
 
-    with open("templates/index.html", "r") as file:
-        html_content = file.read()
-    file.close()
-
-    return HTMLResponse(content=html_content.replace("<!-- TRACKS_LIST -->", tracks_list), status_code=200)
+    return templates.TemplateResponse("index.html", {"request": request, "tracks": tracks_list})
 
 @app.get("/tracks", response_model=List[Track])
 def get_tracks():
     return tracks
 
-@app.get("/tracks/{track_id}", response_class=HTMLResponse)
-def get_track(track_id: int):
+@app.get("/tracks/{track_id}", response_class=Request)
+def get_track_by_id(request:Request, track_id: int):
     for track in tracks:
         if track.id == track_id:
             track = track
@@ -42,11 +50,16 @@ def get_track(track_id: int):
     else:
         raise HTTPException(status_code=404, detail="Track not found")
 
-    with open("templates/track.html", "r") as file:
-        html_content = file.read()
-    file.close()
+    return templates.TemplateResponse("track.html", {"request": request, "track_title": track.title, "path": track.path})
 
-    return HTMLResponse(content=html_content.replace("<!-- TRACK_PATH -->", track.path).replace("<!-- TRACK_TITLE -->", track.title), status_code=200)
+@app.get("/search/{track_name}", response_class=Request)
+def get_track_by_name(request:Request, track_name: str):
+    results = [track for track in tracks if track_name.lower() in track.title.lower()]
+
+    if len(results) == 0:
+        raise HTTPException(status_code=404, detail="No tracks found")
+
+    return templates.TemplateResponse("index.html", {"request": request, "tracks": results})
 
 @app.post("/tracks", response_model=Track)
 def add_track(track: Track):
