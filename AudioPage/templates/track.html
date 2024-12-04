@@ -6,9 +6,9 @@
     <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
 </head>
 <body>
-    <h1 id="track-title"><!-- TRACK_TITLE --></h1>
+    <h1 id="track-title">{{ track_title }}</h1>
     <audio controls id="track-audio">
-        <source src="<!-- TRACK_PATH -->" type="audio/mpeg">
+        <source src="{{ path }}" type="audio/mpeg">
         Your browser does not support the audio element.
     </audio>
 </body>
