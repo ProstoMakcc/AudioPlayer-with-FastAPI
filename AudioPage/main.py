@@ -1,85 +1,102 @@
-from fastapi import FastAPI, UploadFile, HTTPException, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, UploadFile, HTTPException, Form, Depends
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-import shutil
+from fastapi.templating import Jinja2Templates
+from starlette.requests import Request
 from typing import List
+from database import engine
+from sqlalchemy.orm import sessionmaker, Session
+import schemas
+import shutil
+import models
+
+models.Base.metadata.create_all(bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 app = FastAPI()
-
-class Track(BaseModel):
-    id: int
-    title: str
-    artist: str
-    path: str
+templates = Jinja2Templates(directory="templates")
 
 tracks = []
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/", response_class=HTMLResponse)
-def read_root():
-    tracks_list = ""
-    for track in tracks:
-        tracks_list += f"<li>{track.title} - {track.artist} <a href='/tracks/{track.id}'>Play</a></li>"
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-    with open("templates/index.html", "r") as file:
-        html_content = file.read()
-    file.close()
+@app.get("/", response_class=Request)
+def read_root(request: Request, db: Session = Depends(get_db)):
+    all_tracks = db.query(models.Track).all()
+    return templates.TemplateResponse("index.html", {"request": request, "tracks": all_tracks})
 
-    return HTMLResponse(content=html_content.replace("<!-- TRACKS_LIST -->", tracks_list), status_code=200)
+@app.get("/tracks", response_model=List[schemas.Track])
+def get_tracks(db: Session = Depends(get_db)):
+    return db.query(models.Track).all()
 
-@app.get("/tracks", response_model=List[Track])
-def get_tracks():
-    return tracks
+@app.get("/tracks/{track_id}", response_class=Request)
+def get_track_by_id(request: Request, track_id: int, db: Session = Depends(get_db)):
+    track_by_id = db.query(models.Track).filter(models.Track.id == track_id).first()
 
-@app.get("/tracks/{track_id}", response_class=HTMLResponse)
-def get_track(track_id: int):
-    for track in tracks:
-        if track.id == track_id:
-            track = track
-            break
-    else:
+    if not track_by_id:
         raise HTTPException(status_code=404, detail="Track not found")
+    
+    return templates.TemplateResponse("track.html", {"request": request, "track_title": track_by_id.title, "path": track_by_id.path})
 
-    with open("templates/track.html", "r") as file:
-        html_content = file.read()
-    file.close()
+@app.get("/search/{track_name}", response_class=Request)
+def get_track_by_name(request: Request, track_name: str, db: Session = Depends(get_db)):
+    results = db.query(models.Track).filter(models.Track.name == track_name).all()
 
-    return HTMLResponse(content=html_content.replace("<!-- TRACK_PATH -->", track.path).replace("<!-- TRACK_TITLE -->", track.title), status_code=200)
+    if not results:
+        raise HTTPException(status_code=404, detail="No tracks found")
 
-@app.post("/tracks", response_model=Track)
-def add_track(track: Track):
-    tracks.append(track)
+    return templates.TemplateResponse("index.html", {"request": request, "tracks": results})
 
-    return track
+@app.post("/tracks", response_model=schemas.Track)
+def add_track(track: schemas.TrackCreate, db: Session = Depends(get_db)):
+    db_track = models.Track(**track.dict())
+    db.add(db_track)
+    db.commit()
+    db.refresh(db_track)
+    return db_track
 
 @app.delete("/tracks/{track_id}")
-def delete_track(track_id: int):
-    global tracks
-    tracks = [track for track in tracks if track.id != track_id]
+def delete_track(track_id: int, db: Session = Depends(get_db)):
+    track = db.query(models.Track).filter(models.Track.id == track_id).first()
+
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    db.delete(track)
+    db.commit()
 
     return {"message": "Track deleted"}
 
 @app.put("/tracks/{track_id}")
-def update_track(track_id: int, new_track: Track):
-    for index, track in enumerate(tracks):
-        if track.id == track_id:
-            tracks[index] = new_track
-            return {"message": "Track updated"}
-        
-    raise HTTPException(status_code=404, detail="Track not found")
+def update_track(track_id: int, new_track: schemas.TrackUpdate, db: Session = Depends(get_db)):
+    track = db.query(models.Track).filter(models.Track.id == track_id).first()
+
+    if not track:
+        raise HTTPException(status_code=404, detail="No track found")
+
+    for var, value in vars(new_track).items():
+        setattr(track, var, value) if value else None
+
+    db.commit()
+    return {"message": "Track updated"}
 
 @app.post("/tracks/upload")
-def upload_file(file: UploadFile = Form(...)):
+def upload_file(file: UploadFile = Form(...), db: Session = Depends(get_db)):
     upload_path = f"static/uploads/{file.filename}"
 
     with open(upload_path, "wb") as folder:
         shutil.copyfileobj(file.file, folder)
-    folder.close()
 
     web_path = f"/static/uploads/{file.filename}"
-    new_track = Track(id=len(tracks) + 1, title=file.filename, artist="Unknown", path=web_path)
-    tracks.append(new_track)
+    new_track = models.Track(title=file.filename, artist="Unknown", path=web_path)
+    db.add(new_track)
+    db.commit()
 
     return RedirectResponse(url="/", status_code=303)
